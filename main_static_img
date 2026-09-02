@@ -1,0 +1,117 @@
+from tensorflow.keras.models import load_model
+from ultralytics import YOLO
+
+import cv2
+import numpy as np
+
+#Consts
+IMG_SIZE = (30,30)
+TERMINAL_LOG = True
+
+CONFIDENCE_THRESHOLD = 0.25
+
+
+#Contains Every Single Type of Traffic Sign in the dataset we trained the model on, and their corresponding class labels (so later when we run the model we can map it to this)
+CLASSES = {
+    0: 'Speed limit (20km/h)', 1: 'Speed limit (30km/h)', 2: 'Speed limit (50km/h)',
+    3: 'Speed limit (60km/h)', 4: 'Speed limit (70km/h)', 5: 'Speed limit (80km/h)',
+    6: 'End of speed limit (80km/h)', 7: 'Speed limit (100km/h)', 8: 'Speed limit (120km/h)',
+    9: 'No passing', 10: 'No passing veh over 3.5 tons', 11: 'Right-of-way at intersection',
+    12: 'Priority road', 13: 'Yield', 14: 'Stop', 15: 'No vehicles',
+    16: 'Veh > 3.5 tons forbidden', 17: 'No entry', 18: 'General caution',
+    19: 'Dangerous curve left', 20: 'Dangerous curve right', 21: 'Double curve',
+    22: 'Bumpy road', 23: 'Slippery road', 24: 'Road narrows on right',
+    25: 'Road work', 26: 'Traffic signals', 27: 'Pedestrians',
+    28: 'Children crossing', 29: 'Bicycles crossing', 30: 'Beware of ice/snow',
+    31: 'Wild animals crossing', 32: 'End speed + passing limits', 33: 'Turn right ahead',
+    34: 'Turn left ahead', 35: 'Ahead only', 36: 'Go straight or right',
+    37: 'Go straight or left', 38: 'Keep right', 39: 'Keep left',
+    40: 'Roundabout mandatory', 41: 'End of no passing', 42: 'End no passing veh > 3.5 tons'
+}
+
+
+#What I used to pre process the image in training the .h5 mdl
+def preprocess_image(image):
+    #Convert to RGB since opencv uses BGR
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    #Resize the image to the input size of the model
+    image = cv2.resize(image, IMG_SIZE)
+
+    #Normalize the image
+    image = image / 255.0
+
+    #Expand dimensions to match the input shape of the model                    ->  before (30,30,3)  after (1,30,30,3)
+    image = np.expand_dims(image, axis=0)
+
+    #rerurn the preprocessed image
+    return image
+
+def main():
+    #1. Load the trained model
+    cnn = load_model("cnn_trafic.h5")
+
+    #2. Load the YOLO model
+    yolo = YOLO("best_yolov8m.pt")
+    if TERMINAL_LOG:  print("Model [2/2] Loaded Successfully")
+
+    #Get the static image
+    frame = cv2.imread("downloads.jpg")
+
+    #Run YOLO detection
+    results = yolo(frame, verbose=False)[0]
+
+    #Process each detected object
+    if results.boxes is not None:
+        boxes = results.boxes.xyxy.cpu().numpy()  # Get bounding boxes (in an numpy array for speed (also needs to be covnerted to a cpu tensor since numpy is not compatible with GPU tensors))
+        conf = results.boxes.conf.cpu().numpy()  # Same Here (couldve skipped making it a numpy array but for consistency i did it)
+
+        for box, conf in zip(boxes, conf):  #This line is using the zip function to iterate over two lists (boxes and conf) simultaneously. 
+
+            #Skip detections with low confidence
+            if conf <= CONFIDENCE_THRESHOLD:
+                continue
+
+            #Extract the bounding box coordinates
+            x1, y1, x2, y2 = map(int, box)
+
+            #Crop the detected object from the frame
+            cropped_image = frame[y1:y2, x1:x2]
+
+            #Ignore emptry crops
+            if cropped_image.size == 0:
+                continue
+
+            #Preprocess the cropped image
+            preprocessed_image = preprocess_image(cropped_image)
+
+            #Make a prediction using the CNN model
+            prediction = cnn.predict(preprocessed_image)
+
+            #Parse the prediction to get the class label
+            class_id  = np.argmax(prediction[0])
+            class_conf = prediction[0][class_id]
+
+            if class_conf < CONFIDENCE_THRESHOLD:
+                continue
+
+            #Get the class label
+            class_label = CLASSES.get(class_id, "Unknown")
+
+            #Draw the bounding box and label on the frame
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+            #Add the text
+            cv2.putText(frame, f"{class_label} ({class_conf:.2f})", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        #Show Image
+        cv2.imshow("Traffic Sign Detection and Classification", frame)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
